@@ -68,11 +68,65 @@ def _get_schedule_status() -> str:
     size = config.get("scan_size", 3000)
     phone = config.get("phone", "")
     last = config.get("last_run", "Never")
-    status = f"Daily at {time_str} | {size} stocks"
-    if phone:
-        status += " | WhatsApp on"
+    status = f"Daily at {time_str} ET | {size} stocks"
+    if config.get("telegram"):
+        status += " | Telegram on"
     status += f"\nLast run: {last}"
     return status
+
+
+def _update_github_cron(time_str_et: str):
+    """
+    Update the GitHub Actions workflow cron schedule.
+    Converts ET time to UTC and pushes the updated workflow file.
+    """
+    try:
+        # Convert ET to UTC (ET = UTC-4 during EDT, UTC-5 during EST)
+        # Use UTC-4 (EDT) as default since market hours are during EDT most of the year
+        h, m = map(int, time_str_et.split(":"))
+        utc_h = (h + 4) % 24  # ET + 4 = UTC (during EDT)
+
+        import subprocess
+        gh_path = "gh"
+        # Try common paths
+        for p in ["/c/Program Files/GitHub CLI/gh", "gh"]:
+            try:
+                subprocess.run([p, "--version"], capture_output=True, timeout=3)
+                gh_path = p
+                break
+            except Exception:
+                continue
+
+        workflow_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     ".github", "workflows", "daily_scan.yml")
+
+        with open(workflow_path, "r") as f:
+            content = f.read()
+
+        # Replace the cron line
+        import re
+        new_cron = f"    - cron: '{m} {utc_h} * * 1-5'"
+        content = re.sub(r"    - cron: '.*'", new_cron, content)
+
+        with open(workflow_path, "w") as f:
+            f.write(content)
+
+        # Commit and push
+        subprocess.run(["git", "add", workflow_path], capture_output=True, timeout=5)
+        subprocess.run(
+            ["git", "commit", "-m", f"Update daily scan schedule to {time_str_et} ET ({utc_h}:{m:02d} UTC)"],
+            capture_output=True, timeout=10
+        )
+        result = subprocess.run(
+            ["git", "push", "origin", "main"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            return True, ""
+        else:
+            return False, result.stderr.strip()
+    except Exception as e:
+        return False, str(e)
 
 
 def _run_daily_scan_background(scan_size: int, phone: str = ""):
@@ -788,22 +842,10 @@ with st.sidebar:
 
     st.divider()
 
-    scan_col1, scan_col2 = st.columns([3, 1])
-    with scan_col1:
-        run_scan = st.button("Run Scan", type="primary", use_container_width=True)
-    with scan_col2:
-        if st.button("Stop", use_container_width=True, type="secondary"):
-            st.session_state.stop_scan = True
-
-    st.divider()
-    st.markdown('<div class="sidebar-section">Export</div>', unsafe_allow_html=True)
-    export_fmt = st.radio("Export Format", ["CSV", "JSON"], horizontal=True, label_visibility="collapsed")
-
-    export_btn = st.button(
-        "Export Results",
-        use_container_width=True,
-        disabled=st.session_state.scan_results is None,
-    )
+    run_scan = st.button("Run Scan", type="primary", use_container_width=True)
+    if st.button("Stop Scan", use_container_width=True):
+        st.session_state.stop_scan = True
+        st.warning("Stopping...")
 
     st.divider()
     st.markdown('<div class="sidebar-section">Telegram Alerts</div>', unsafe_allow_html=True)
@@ -853,15 +895,15 @@ with st.sidebar:
 
     saved_config = _load_schedule()
     daily_enabled = st.toggle("Enable Daily Scan", value=saved_config.get("enabled", False))
-    daily_time = st.time_input(
-        "Scan Time",
-        value=datetime.strptime(saved_config.get("time", "18:30"), "%H:%M").time(),
-        help="When to run the daily scan (after market close)",
-    )
 
     daily_universe_size = 3000
-    daily_wa = False
+    daily_tg = False
     if daily_enabled:
+        daily_time = st.time_input(
+            "Scan Time (ET)",
+            value=datetime.strptime(saved_config.get("time", "18:30"), "%H:%M").time(),
+            help="Eastern Time — when to run the daily scan",
+        )
         daily_universe_size = st.select_slider(
             "Daily Scan Size",
             options=[500, 1000, 2000, 3000],
@@ -874,39 +916,39 @@ with st.sidebar:
         )
         if daily_tg and (not tg_token or not tg_chat_id):
             st.caption("Enter bot token and chat ID above first")
+    else:
+        daily_time = datetime.strptime(saved_config.get("time", "18:30"), "%H:%M").time()
 
-    col_sched1, col_sched2 = st.columns(2)
-    with col_sched1:
-        if st.button("Save Schedule", use_container_width=True):
+    if daily_enabled:
+        if st.button("Save & Update GitHub Schedule", use_container_width=True):
+            time_str = daily_time.strftime("%H:%M")
             config = {
                 "enabled": daily_enabled,
-                "time": daily_time.strftime("%H:%M"),
+                "time": time_str,
                 "scan_size": daily_universe_size,
-                "telegram": daily_tg if daily_enabled else False,
-                "tg_token": tg_token if (daily_enabled and daily_tg) else "",
-                "tg_chat_id": tg_chat_id if (daily_enabled and daily_tg) else "",
+                "telegram": daily_tg,
+                "tg_token": tg_token if daily_tg else "",
+                "tg_chat_id": tg_chat_id if daily_tg else "",
                 "last_run": saved_config.get("last_run", "Never"),
                 "last_results": saved_config.get("last_results", 0),
                 "last_new": saved_config.get("last_new", 0),
             }
             _save_schedule(config)
-            if daily_enabled:
-                st.success(f"Scheduled daily at {config['time']}")
+
+            # Update GitHub Actions cron schedule
+            ok, msg = _update_github_cron(time_str)
+            if ok:
+                st.success(f"Saved! GitHub Actions updated to run daily at {time_str} ET")
             else:
-                st.success("Daily scan disabled")
-    with col_sched2:
-        run_daily_now = st.button("Run Now", use_container_width=True)
+                _save_schedule(config)
+                st.warning(f"Local schedule saved at {time_str}. GitHub update failed: {msg}")
+
+    run_daily_now = st.button("Run Now", use_container_width=True)
 
     # Status
     status = _get_schedule_status()
     if status:
         st.caption(status)
-
-    # Show last scan log if available
-    if os.path.exists(_SCAN_LOG_FILE):
-        with st.expander("Last Daily Scan Log"):
-            with open(_SCAN_LOG_FILE) as f:
-                st.code(f.read(), language=None)
 
 
 # ── Main Header ──
@@ -1313,20 +1355,6 @@ elif results is None:
     </div>
     """, unsafe_allow_html=True)
 
-
-# ── Export ──
-if export_btn and results:
-    fmt = export_fmt.lower()
-    filepath = save_results(results, fmt=fmt)
-    st.sidebar.success(f"Saved to `{os.path.basename(filepath)}`")
-
-    with open(filepath, "rb") as f:
-        st.sidebar.download_button(
-            label="Download File",
-            data=f.read(),
-            file_name=os.path.basename(filepath),
-            mime="text/csv" if fmt == "csv" else "application/json",
-        )
 
 
 # ── Manual Telegram send ──
