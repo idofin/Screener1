@@ -1,4 +1,4 @@
-import streamlit as st
+import os
 
 
 def _safe_fmt(val, fmt=".1f", multiply=1):
@@ -11,66 +11,93 @@ def _safe_fmt(val, fmt=".1f", multiply=1):
         return str(val)
 
 
-def notify_new_signals(current_symbols: list[str], previous_symbols: set):
+def notify_new_signals(current_symbols: list, previous_symbols: set):
     """Show toast notifications for newly detected signals."""
-    if not previous_symbols:
+    try:
+        import streamlit as st
+    except Exception:
         return
 
+    if not previous_symbols:
+        return
     new = [s for s in current_symbols if s not in previous_symbols]
     if new:
         st.toast(f"New signals detected: {', '.join(new[:10])}", icon="🚨")
-
     removed = [s for s in previous_symbols if s not in current_symbols]
     if removed:
         st.toast(f"Signals no longer active: {', '.join(removed[:10])}", icon="📉")
 
 
 def _build_message(results: list[dict]) -> str:
-    """Build a formatted message from scan results."""
-    lines = ["Stock Reversal Screener Alert", ""]
-    for r in results[:10]:
+    """Build a formatted WhatsApp message."""
+    lines = [
+        "📊 *ReversalIQ — Reversal Signals*",
+        f"_{len(results)} stock{'s' if len(results) != 1 else ''} detected_",
+        "",
+    ]
+
+    for idx, r in enumerate(results[:10]):
         fund = r.get("fundamentals", {})
         name = fund.get("longName", r["symbol"])
+        sector = fund.get("sector", "")
+        industry = fund.get("industry", "")
+
+        try:
+            from datetime import datetime as _dt
+            sig_date = _dt.strptime(r["signal_date"], "%Y-%m-%d").strftime("%b %d")
+        except Exception:
+            sig_date = r["signal_date"]
+
+        lines.append(f"*{r['symbol']}*  {name}")
+        lines.append(f"{sector} | {industry}")
+        lines.append(f"💰 *${r['current_price']}*  ·  📉 -{r['pullback_pct']}% from high")
+        lines.append("")
+        lines.append(f"Signal: *{sig_date}*  ·  RSI: *{r['rsi_at_signal']}*  ·  SMA: *{r['sma_period']}d*")
+
         rev_g = fund.get("revenueGrowth")
         pe = fund.get("trailingPE")
         pm = fund.get("profitMargins")
 
-        lines.append(f"{r['symbol']} - {name}")
-        lines.append(f"  Signal: {r['signal_date']} | RSI: {r['rsi_at_signal']}")
-        lines.append(f"  Price: ${r['price_at_signal']} > Now: ${r['current_price']}")
-        lines.append(f"  Pullback: {r['pullback_pct']}% from ${r['high_52w']}")
-        lines.append(f"  SMA-{r['sma_period']}: ${r['sma_value']} ({r['sma_distance_pct']}% away)")
-
-        detail_parts = []
+        fund_parts = []
         rev_str = _safe_fmt(rev_g, multiply=100)
         if rev_str is not None:
-            detail_parts.append(f"Rev Growth: {rev_str}%")
+            fund_parts.append(f"Rev: +{rev_str}%")
         pm_str = _safe_fmt(pm, multiply=100)
         if pm_str is not None:
-            detail_parts.append(f"Margin: {pm_str}%")
+            fund_parts.append(f"Margin: {pm_str}%")
         pe_str = _safe_fmt(pe)
         if pe_str is not None:
-            detail_parts.append(f"P/E: {pe_str}")
-        if detail_parts:
-            lines.append(f"  {' | '.join(detail_parts)}")
+            fund_parts.append(f"P/E: {pe_str}")
+        if fund_parts:
+            lines.append("  ·  ".join(fund_parts))
+
         lines.append("")
+        lines.append(
+            f"{r['symbol']} triggered a reversal when RSI dropped to "
+            f"*{r['rsi_at_signal']}* while price was within "
+            f"{r['sma_distance_pct']}% of its {r['sma_period']}-day SMA."
+        )
+
+        if idx < min(len(results), 10) - 1:
+            lines.append("")
+            lines.append("─" * 30)
+            lines.append("")
 
     if len(results) > 10:
-        lines.append(f"...and {len(results) - 10} more. Check the app for full results.")
+        lines.append("")
+        lines.append(f"_+{len(results) - 10} more signals in the app_")
 
-    lines.append("Sent by ReversalIQ Stock Screener")
+    lines.append("")
+    lines.append("─" * 30)
+    lines.append("_Sent by ReversalIQ_")
+
     return "\n".join(lines)
 
 
 def send_whatsapp(phone: str, results: list[dict], wait_time: int = 15) -> bool:
     """
-    Send scan results via WhatsApp using pywhatkit.
-    Opens WhatsApp Web in your browser and sends the message.
-
-    Args:
-        phone: Phone number with country code, e.g. "+972501234567"
-        results: List of scan result dicts
-        wait_time: Seconds to wait for WhatsApp Web to load (default 15)
+    Send scan results via WhatsApp using pywhatkit text message.
+    Opens WhatsApp Web and sends automatically.
     """
     if not phone or not results:
         return False
@@ -79,8 +106,6 @@ def send_whatsapp(phone: str, results: list[dict], wait_time: int = 15) -> bool:
         import pywhatkit as kit
 
         message = _build_message(results)
-
-        # sendwhatmsg_instantly opens WhatsApp Web and sends right away
         kit.sendwhatmsg_instantly(
             phone_no=phone,
             message=message,
@@ -89,5 +114,5 @@ def send_whatsapp(phone: str, results: list[dict], wait_time: int = 15) -> bool:
         )
         return True
     except Exception as e:
-        st.error(f"WhatsApp send error: {e}")
+        print(f"WhatsApp send error: {e}")
         return False

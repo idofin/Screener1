@@ -1,5 +1,6 @@
 import sys
 import os
+import textwrap
 sys.path.insert(0, os.path.dirname(__file__))
 
 import streamlit as st
@@ -14,7 +15,8 @@ from config import (
 from data_fetcher import fetch_universe, fetch_price_data
 from screener_engine import technical_screen, fundamental_filter
 from results_manager import save_results, load_scan_history, get_previous_symbols
-from notifications import notify_new_signals, send_whatsapp
+from notifications import notify_new_signals
+from telegram_alerts import send_alerts as send_telegram
 from indicators import compute_sma
 
 
@@ -26,6 +28,177 @@ def _fmt(val, fmt=".1f", multiply=1, prefix="", suffix=""):
         return f"{prefix}{float(val) * multiply:{fmt}}{suffix}"
     except (ValueError, TypeError):
         return str(val)
+
+
+# ── Daily scan scheduler (runs inside the Streamlit process) ──
+import json as _json
+import threading
+
+PYTHON_PATH = sys.executable
+_SCHEDULE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache", "daily_schedule.json")
+_SCAN_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache", "daily_scan_log.txt")
+
+
+def _load_schedule() -> dict:
+    """Load saved schedule config."""
+    try:
+        with open(_SCHEDULE_FILE) as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_schedule(config: dict):
+    """Persist schedule config to disk."""
+    os.makedirs(os.path.dirname(_SCHEDULE_FILE), exist_ok=True)
+    with open(_SCHEDULE_FILE, "w") as f:
+        _json.dump(config, f, indent=2)
+
+
+def _is_daily_scan_active() -> bool:
+    config = _load_schedule()
+    return config.get("enabled", False)
+
+
+def _get_schedule_status() -> str:
+    config = _load_schedule()
+    if not config.get("enabled"):
+        return ""
+    time_str = config.get("time", "18:30")
+    size = config.get("scan_size", 3000)
+    phone = config.get("phone", "")
+    last = config.get("last_run", "Never")
+    status = f"Daily at {time_str} | {size} stocks"
+    if phone:
+        status += " | WhatsApp on"
+    status += f"\nLast run: {last}"
+    return status
+
+
+def _run_daily_scan_background(scan_size: int, phone: str = ""):
+    """
+    Run the full scan pipeline in a background thread.
+    This is the same logic as daily_scan.py but runs inside the app process.
+    """
+    import json as json_mod
+    from data_fetcher import fetch_universe, fetch_price_data
+    from screener_engine import technical_screen, fundamental_filter
+    from telegram_alerts import send_alerts as _send_tg
+    from results_manager import get_previous_symbols
+
+    log_lines = []
+    def log(msg):
+        line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
+        log_lines.append(line)
+        print(line)
+
+    try:
+        log(f"Daily scan started — {scan_size} stocks")
+
+        # 1. Fetch universe
+        symbols = fetch_universe("All US Large-Cap ($1B+)", scan_size)
+        log(f"Fetched {len(symbols)} US stocks")
+
+        # 2. Download prices
+        price_data = fetch_price_data(tuple(symbols), period="1y")
+        log(f"Downloaded data for {len(price_data)} stocks")
+
+        # 3. Technical screen
+        candidates = technical_screen(
+            price_data,
+            rsi_threshold=DEFAULT_RSI_THRESHOLD,
+            sma_proximity_pct=DEFAULT_SMA_PROXIMITY_PCT,
+            pullback_pct=DEFAULT_PULLBACK_PCT,
+            confirmation_candles=DEFAULT_CONFIRMATION_CANDLES,
+            lookback_days=DEFAULT_LOOKBACK_DAYS,
+        )
+        log(f"{len(candidates)} technical candidates")
+
+        # 4. Fundamental filter
+        results = fundamental_filter(candidates)
+        log(f"{len(results)} passed fundamental filter")
+
+        # 5. Compare with previous scan — only send NEW signals
+        prev_symbols = get_previous_symbols()
+        new_signals = [r for r in results if r["symbol"] not in prev_symbols]
+        log(f"{len(new_signals)} NEW signals, {len(results) - len(new_signals)} returning")
+
+        # 6. Save results
+        if results:
+            from results_manager import save_results as save_res
+            save_res(results, fmt="json")
+            log("Results saved")
+
+        # 7. Telegram — only new signals
+        sched_config = _load_schedule()
+        tg_tok = sched_config.get("tg_token", "")
+        tg_cid = sched_config.get("tg_chat_id", "")
+        if tg_tok and tg_cid and new_signals:
+            log(f"Sending {len(new_signals)} new signal(s) to Telegram...")
+            _send_tg(new_signals, tg_tok, tg_cid)
+            log("Telegram sent")
+        elif tg_tok and tg_cid and not new_signals:
+            log("No new signals — Telegram skipped")
+
+        # Update last run time
+        config = _load_schedule()
+        config["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        config["last_results"] = len(results)
+        config["last_new"] = len(new_signals)
+        _save_schedule(config)
+
+        log("Daily scan complete!")
+
+    except Exception as e:
+        log(f"Daily scan ERROR: {e}")
+
+    # Write log
+    try:
+        os.makedirs(os.path.dirname(_SCAN_LOG_FILE), exist_ok=True)
+        with open(_SCAN_LOG_FILE, "w") as f:
+            f.write("\n".join(log_lines))
+    except Exception:
+        pass
+
+
+def _start_scheduler():
+    """Start a background thread that checks every 30s if it's time to scan."""
+    import time as _time
+
+    def scheduler_loop():
+        last_triggered_date = None
+        while True:
+            try:
+                config = _load_schedule()
+                if config.get("enabled"):
+                    target_time = config.get("time", "18:30")
+                    now = datetime.now()
+                    current_time = now.strftime("%H:%M")
+                    current_date = now.strftime("%Y-%m-%d")
+
+                    # Trigger once per day at the scheduled time
+                    if current_time == target_time and current_date != last_triggered_date:
+                        last_triggered_date = current_date
+                        phone = config.get("phone", "")
+                        # Open daily_scan.py in a visible console window
+                        import subprocess as _sp
+                        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_scan.py")
+                        cmd = f'"{PYTHON_PATH}" "{script}"'
+                        if phone:
+                            cmd += f" {phone}"
+                        _sp.Popen(f'start "ReversalIQ Daily Scan" cmd /k {cmd}', shell=True)
+            except Exception:
+                pass
+            _time.sleep(30)
+
+    t = threading.Thread(target=scheduler_loop, daemon=True)
+    t.start()
+
+
+# Start the scheduler when the app loads (only once)
+if "scheduler_started" not in st.session_state:
+    st.session_state.scheduler_started = True
+    _start_scheduler()
 
 
 # ── Page config ──
@@ -399,6 +572,125 @@ st.markdown("""
         font-size: 18px !important; font-weight: 700 !important;
         color: #fff !important; letter-spacing: -0.01em;
     }
+
+    /* ───── SIGNAL CARD (matching landing page) ───── */
+    .signal-card {
+        background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 16px;
+        padding: 24px;
+        margin-bottom: 16px;
+        backdrop-filter: blur(20px);
+        transition: border-color 0.25s, box-shadow 0.25s;
+    }
+    .signal-card:hover {
+        border-color: rgba(59,145,255,0.15);
+        box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    }
+
+    /* Card header */
+    .card-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 20px;
+    }
+    .card-header-left {
+        display: flex; align-items: center; gap: 12px;
+    }
+    .stock-icon {
+        width: 44px; height: 44px; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700; font-size: 16px; color: #fff;
+    }
+    .stock-name {
+        font-size: 16px; font-weight: 700; color: #fff;
+    }
+    .stock-name span {
+        font-size: 12px; font-weight: 400; color: var(--text-muted); margin-left: 6px;
+    }
+    .stock-sector {
+        font-size: 11px; color: var(--text-muted);
+    }
+    .card-header-right { text-align: right; }
+    .card-price {
+        font-size: 16px; font-weight: 700; color: #fff;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .card-pullback {
+        font-size: 12px; font-weight: 600; color: var(--red);
+        font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Signal badge */
+    .signal-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 11px; font-weight: 600; color: var(--green);
+        background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.15);
+        padding: 4px 10px; border-radius: 999px; margin-left: 12px;
+    }
+    .signal-badge::before {
+        content: ''; width: 6px; height: 6px; border-radius: 50%;
+        background: var(--green); display: inline-block;
+    }
+
+    /* Metrics grid */
+    .metrics-grid {
+        display: grid; gap: 8px; margin-bottom: 16px;
+    }
+    .metrics-grid-5 { grid-template-columns: repeat(5, 1fr); }
+    .metrics-grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .metrics-grid-6 { grid-template-columns: repeat(6, 1fr); }
+    .metrics-grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .metric-box {
+        background: var(--bg-100);
+        border-radius: 10px;
+        padding: 12px 8px;
+        text-align: center;
+    }
+    .metric-label {
+        font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+        color: var(--text-muted); margin-bottom: 4px;
+    }
+    .metric-value {
+        font-size: 15px; font-weight: 700;
+        font-family: 'JetBrains Mono', monospace;
+        color: #fff;
+    }
+    .metric-value.brand { color: var(--brand-400); }
+    .metric-value.green { color: var(--green); }
+    .metric-value.red { color: var(--red); }
+    .metric-value.orange { color: var(--orange); }
+
+    /* Confirmation row */
+    .confirm-row {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 12px; margin-top: 12px;
+    }
+    .confirm-row .label { color: var(--text-muted); }
+    .confirm-row .value { color: var(--green); font-weight: 600; }
+    .confirm-checks {
+        display: flex; gap: 4px; margin-left: auto;
+    }
+    .confirm-check {
+        width: 22px; height: 22px; border-radius: 6px;
+        background: rgba(34,197,94,0.12);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .confirm-check svg { width: 12px; height: 12px; }
+
+    /* Explanation text */
+    .card-explanation {
+        font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+        padding: 16px 0 0 0; border-top: 1px solid var(--border); margin-top: 16px;
+    }
+    .card-explanation strong { color: var(--brand-300); font-weight: 600; }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+        .metrics-grid-5, .metrics-grid-6 { grid-template-columns: repeat(3, 1fr); }
+        .card-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+        .card-header-right { text-align: left; }
+    }
 </style>
 
 <div class="grid-bg"></div>
@@ -412,6 +704,13 @@ if "price_cache" not in st.session_state:
     st.session_state.price_cache = {}
 if "scan_time" not in st.session_state:
     st.session_state.scan_time = None
+if "stop_scan" not in st.session_state:
+    st.session_state.stop_scan = False
+
+
+def _check_stop():
+    """Returns True if the user has requested to stop the scan."""
+    return st.session_state.get("stop_scan", False)
 
 
 # ── Sidebar ──
@@ -451,8 +750,8 @@ with st.sidebar:
 
     max_stocks = st.select_slider(
         "Stocks to Scan",
-        options=[50, 100, 250, 500],
-        value=100,
+        options=[50, 100, 250, 500, 1000, 2000, 3000],
+        value=500,
         help="Number of stocks to screen (more = slower)",
     )
 
@@ -489,7 +788,12 @@ with st.sidebar:
 
     st.divider()
 
-    run_scan = st.button("Run Scan", type="primary", use_container_width=True)
+    scan_col1, scan_col2 = st.columns([3, 1])
+    with scan_col1:
+        run_scan = st.button("Run Scan", type="primary", use_container_width=True)
+    with scan_col2:
+        if st.button("Stop", use_container_width=True, type="secondary"):
+            st.session_state.stop_scan = True
 
     st.divider()
     st.markdown('<div class="sidebar-section">Export</div>', unsafe_allow_html=True)
@@ -502,24 +806,86 @@ with st.sidebar:
     )
 
     st.divider()
-    st.markdown('<div class="sidebar-section">WhatsApp Alerts</div>', unsafe_allow_html=True)
-    wa_enabled = st.toggle("Enable WhatsApp", value=False)
-    wa_phone = st.text_input(
-        "Phone Number",
-        placeholder="+972501234567",
-        help="International format with country code",
+    st.markdown('<div class="sidebar-section">Telegram Alerts</div>', unsafe_allow_html=True)
+    tg_enabled = st.toggle("Enable Telegram", value=False)
+    tg_token = st.text_input(
+        "Bot Token",
+        type="password",
+        help="Get from @BotFather on Telegram",
     )
-    if wa_enabled and not wa_phone:
-        st.caption("Enter your phone number to enable alerts")
-    if wa_enabled and wa_phone:
-        st.caption("Make sure you're logged into WhatsApp Web in your browser")
+    tg_chat_id = st.text_input(
+        "Chat ID",
+        help="Your Telegram chat ID",
+    )
+    if tg_enabled and (not tg_token or not tg_chat_id):
+        st.caption("Set up: message @BotFather on Telegram → /newbot → get token. Then message your bot and visit api.telegram.org/bot<TOKEN>/getUpdates to find your chat\\_id")
 
-    wa_send_btn = st.button(
-        "Send Results to WhatsApp",
+    tg_send_btn = st.button(
+        "Send Results to Telegram",
         use_container_width=True,
-        disabled=(st.session_state.scan_results is None or not wa_enabled
-                  or not wa_phone),
+        disabled=(st.session_state.scan_results is None or not tg_enabled
+                  or not tg_token or not tg_chat_id),
     )
+
+    st.divider()
+    st.markdown('<div class="sidebar-section">Daily Auto-Scan</div>', unsafe_allow_html=True)
+
+    saved_config = _load_schedule()
+    daily_enabled = st.toggle("Enable Daily Scan", value=saved_config.get("enabled", False))
+    daily_time = st.time_input(
+        "Scan Time",
+        value=datetime.strptime(saved_config.get("time", "18:30"), "%H:%M").time(),
+        help="When to run the daily scan (after market close)",
+    )
+
+    daily_universe_size = 3000
+    daily_wa = False
+    if daily_enabled:
+        daily_universe_size = st.select_slider(
+            "Daily Scan Size",
+            options=[500, 1000, 2000, 3000],
+            value=saved_config.get("scan_size", 3000),
+            help="How many stocks to scan daily",
+        )
+        daily_tg = st.checkbox(
+            "Send Telegram alert",
+            value=saved_config.get("telegram", False) and tg_enabled,
+        )
+        if daily_tg and (not tg_token or not tg_chat_id):
+            st.caption("Enter bot token and chat ID above first")
+
+    col_sched1, col_sched2 = st.columns(2)
+    with col_sched1:
+        if st.button("Save Schedule", use_container_width=True):
+            config = {
+                "enabled": daily_enabled,
+                "time": daily_time.strftime("%H:%M"),
+                "scan_size": daily_universe_size,
+                "telegram": daily_tg if daily_enabled else False,
+                "tg_token": tg_token if (daily_enabled and daily_tg) else "",
+                "tg_chat_id": tg_chat_id if (daily_enabled and daily_tg) else "",
+                "last_run": saved_config.get("last_run", "Never"),
+                "last_results": saved_config.get("last_results", 0),
+                "last_new": saved_config.get("last_new", 0),
+            }
+            _save_schedule(config)
+            if daily_enabled:
+                st.success(f"Scheduled daily at {config['time']}")
+            else:
+                st.success("Daily scan disabled")
+    with col_sched2:
+        run_daily_now = st.button("Run Now", use_container_width=True)
+
+    # Status
+    status = _get_schedule_status()
+    if status:
+        st.caption(status)
+
+    # Show last scan log if available
+    if os.path.exists(_SCAN_LOG_FILE):
+        with st.expander("Last Daily Scan Log"):
+            with open(_SCAN_LOG_FILE) as f:
+                st.code(f.read(), language=None)
 
 
 # ── Main Header ──
@@ -571,8 +937,93 @@ CANDLE_COLORS = dict(
 )
 
 
+# ── Run daily scan (in-page) ──
+if run_daily_now:
+    st.session_state.stop_scan = False
+    config = _load_schedule()
+    daily_scan_size = config.get("scan_size", 3000)
+    daily_tg_token = config.get("tg_token", tg_token or "")
+    daily_tg_chat_id = config.get("tg_chat_id", tg_chat_id or "")
+
+    st.info(f"Running daily scan — **{daily_scan_size}** stocks from **All US Large-Cap**...")
+    progress_bar = st.progress(0, text="Fetching stock universe...")
+
+    daily_tickers = fetch_universe("All US Large-Cap ($1B+)", daily_scan_size)
+    progress_bar.progress(10, text=f"Found {len(daily_tickers)} stocks. Downloading prices...")
+
+    daily_price_data = fetch_price_data(tuple(daily_tickers), period="1y")
+    progress_bar.progress(40, text=f"Downloaded {len(daily_price_data)} stocks. Screening...")
+
+    def daily_tech_progress(current, total, msg):
+        pct = 40 + int((current / max(total, 1)) * 30)
+        progress_bar.progress(min(pct, 70), text=msg)
+
+    daily_candidates = technical_screen(
+        daily_price_data,
+        rsi_threshold=DEFAULT_RSI_THRESHOLD,
+        sma_proximity_pct=DEFAULT_SMA_PROXIMITY_PCT,
+        pullback_pct=DEFAULT_PULLBACK_PCT,
+        confirmation_candles=DEFAULT_CONFIRMATION_CANDLES,
+        lookback_days=DEFAULT_LOOKBACK_DAYS,
+        progress_callback=daily_tech_progress,
+        stop_flag=_check_stop,
+    )
+
+    if _check_stop():
+        st.warning("Daily scan stopped by user.")
+        st.session_state.stop_scan = False
+        st.stop()
+
+    progress_bar.progress(70, text=f"{len(daily_candidates)} candidates. Checking fundamentals...")
+
+    def daily_fund_progress(current, total, msg):
+        pct = 70 + int((current / max(total, 1)) * 25)
+        progress_bar.progress(min(pct, 95), text=msg)
+
+    daily_results = fundamental_filter(daily_candidates, progress_callback=daily_fund_progress, stop_flag=_check_stop)
+
+    if _check_stop():
+        st.warning("Daily scan stopped by user.")
+        st.session_state.stop_scan = False
+        st.stop()
+
+    # Compare with previous
+    prev = get_previous_symbols()
+    new_only = [r for r in daily_results if r["symbol"] not in prev]
+
+    progress_bar.progress(100, text=f"Done! {len(daily_results)} total, {len(new_only)} new signals")
+
+    # Save to session so they show in the results area
+    st.session_state.scan_results = daily_results
+    st.session_state.price_cache = daily_price_data
+    st.session_state.scan_time = datetime.now()
+
+    # Save results for next comparison
+    if daily_results:
+        save_results(daily_results, fmt="json")
+
+    # Update schedule last run
+    sched = _load_schedule()
+    sched["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    sched["last_results"] = len(daily_results)
+    sched["last_new"] = len(new_only)
+    _save_schedule(sched)
+
+    # Telegram — only new
+    if tg_enabled and tg_token and tg_chat_id and new_only:
+        with st.spinner(f"Sending {len(new_only)} new signal(s) to Telegram..."):
+            if send_telegram(new_only, tg_token, tg_chat_id):
+                st.success(f"Telegram sent! ({len(new_only)} new signals)")
+            else:
+                st.warning("Telegram send failed")
+    elif tg_enabled and tg_token and tg_chat_id and not new_only and daily_results:
+        st.info("No new signals since last scan — Telegram skipped")
+
+
 # ── Run scan ──
 if run_scan:
+    st.session_state.stop_scan = False
+
     if universe == "Custom":
         tickers = [t.strip().upper() for t in custom_tickers.split(",") if t.strip()]
         if not tickers:
@@ -600,7 +1051,13 @@ if run_scan:
         confirmation_candles=confirm_candles,
         lookback_days=DEFAULT_LOOKBACK_DAYS,
         progress_callback=tech_progress,
+        stop_flag=_check_stop,
     )
+
+    if _check_stop():
+        st.warning("Scan stopped by user.")
+        st.session_state.stop_scan = False
+        st.stop()
 
     progress_bar.progress(70, text=f"Found {len(candidates)} technical candidates. Checking fundamentals...")
 
@@ -608,7 +1065,13 @@ if run_scan:
         pct = 70 + int((current / max(total, 1)) * 28)
         progress_bar.progress(min(pct, 98), text=msg)
 
-    results = fundamental_filter(candidates, progress_callback=fund_progress)
+    results = fundamental_filter(candidates, progress_callback=fund_progress, stop_flag=_check_stop)
+
+    if _check_stop():
+        st.warning("Scan stopped by user.")
+        st.session_state.stop_scan = False
+        st.stop()
+
     progress_bar.progress(100, text="Scan complete!")
 
     st.session_state.scan_results = results
@@ -617,14 +1080,17 @@ if run_scan:
 
     prev = get_previous_symbols()
     current_syms = [r["symbol"] for r in results]
+    new_only = [r for r in results if r["symbol"] not in prev]
     notify_new_signals(current_syms, prev)
 
-    if wa_enabled and wa_phone and results:
-        with st.spinner("Sending WhatsApp alert..."):
-            if send_whatsapp(wa_phone, results):
-                st.success("WhatsApp alert sent!")
+    if tg_enabled and tg_token and tg_chat_id and new_only:
+        with st.spinner(f"Sending {len(new_only)} new signal(s) to Telegram..."):
+            if send_telegram(new_only, tg_token, tg_chat_id):
+                st.success(f"Telegram alert sent! ({len(new_only)} new signals)")
             else:
-                st.warning("WhatsApp send failed. Check your phone number and API key.")
+                st.warning("Telegram send failed.")
+    elif tg_enabled and tg_token and tg_chat_id and results and not new_only:
+        st.info("No new signals since last scan — Telegram skipped")
 
 
 # ── Display results ──
@@ -662,24 +1128,84 @@ if results is not None:
             sym = r["symbol"]
             fund = r.get("fundamentals", {})
             name = fund.get("longName", sym)
-            sector = fund.get("sector", "")
+            sector = fund.get("sector", "N/A")
+            industry = fund.get("industry", "")
 
-            # Expander label
-            label = f"**{sym}** — {name}  |  RSI: {r['rsi_at_signal']}  |  Pullback: {r['pullback_pct']}%  |  SMA-{r['sma_period']}"
+            # Color for stock icon based on first letter hash
+            icon_colors = [
+                "linear-gradient(135deg,#1a6ff5,#1448b6)",
+                "linear-gradient(135deg,#16a34a,#15803d)",
+                "linear-gradient(135deg,#9333ea,#7e22ce)",
+                "linear-gradient(135deg,#ea580c,#c2410c)",
+                "linear-gradient(135deg,#0891b2,#0e7490)",
+                "linear-gradient(135deg,#e11d48,#be123c)",
+            ]
+            icon_bg = icon_colors[ord(sym[0]) % len(icon_colors)]
 
-            with st.expander(label, expanded=False):
+            # Format signal date nicely
+            try:
+                from datetime import datetime as _dt
+                sig_date = _dt.strptime(r["signal_date"], "%Y-%m-%d").strftime("%b %d")
+            except Exception:
+                sig_date = r["signal_date"]
 
-                # Signal metrics
-                m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric("Signal Date", r["signal_date"])
-                m2.metric("Price @ Signal", _fmt(r['price_at_signal'], ",.2f", prefix="$"))
-                m3.metric("Current Price", _fmt(r['current_price'], ",.2f", prefix="$"))
-                m4.metric("52W High", _fmt(r['high_52w'], ",.2f", prefix="$"))
-                m5.metric("RSI", f"{r['rsi_at_signal']}")
+            # Build confirmation checks HTML
+            checks_html = ""
+            for i in range(r.get("confirmed_candles", 3)):
+                checks_html += '<div class="confirm-check"><svg fill="#22c55e" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg></div>'
 
-                # Chart
-                price_data = st.session_state.price_cache.get(sym)
-                if price_data is not None:
+            # Revenue growth color
+            rev_g = fund.get("revenueGrowth")
+            rev_str = _fmt(rev_g, ".1f", multiply=100, prefix="+", suffix="%") if rev_g and float(rev_g) > 0 else _fmt(rev_g, ".1f", multiply=100, suffix="%")
+            rev_class = "green" if rev_g and float(rev_g) > 0 else "red" if rev_g and float(rev_g) < 0 else ""
+
+            # Build the card HTML
+            card_html = textwrap.dedent(f'''\
+<div class="signal-card">
+<div class="card-header">
+<div class="card-header-left">
+<div class="stock-icon" style="background:{icon_bg};">{sym[0]}</div>
+<div>
+<div class="stock-name">{sym}<span>{name}</span>
+<span class="signal-badge">Reversal Signal</span>
+</div>
+<div class="stock-sector">{sector} | {industry}</div>
+</div>
+</div>
+<div class="card-header-right">
+<div class="card-price">${r["current_price"]}</div>
+<div class="card-pullback">-{r["pullback_pct"]}% from high</div>
+</div>
+</div>
+<div class="metrics-grid metrics-grid-5">
+<div class="metric-box">
+<div class="metric-label">Signal</div>
+<div class="metric-value">{sig_date}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">RSI</div>
+<div class="metric-value brand">{r["rsi_at_signal"]}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">SMA</div>
+<div class="metric-value orange">{r["sma_period"]}d</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">SMA Dist</div>
+<div class="metric-value green">{r["sma_distance_pct"]}%</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">52W High</div>
+<div class="metric-value">${r["high_52w"]}</div>
+</div>
+</div>
+</div>''')
+            st.markdown(card_html, unsafe_allow_html=True)
+
+            # Chart in a dropdown
+            price_data = st.session_state.price_cache.get(sym)
+            if price_data is not None:
+                with st.expander(f"Chart — {sym} Last 90 Days", expanded=False):
                     chart_df = price_data.tail(90).copy()
                     close_col = chart_df["Close"].squeeze() if isinstance(chart_df["Close"], pd.DataFrame) else chart_df["Close"]
                     full_close = (
@@ -713,19 +1239,45 @@ if results is not None:
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Fundamental details
-                st.divider()
-                f1, f2, f3, f4, f5, f6 = st.columns(6)
-                f1.metric("Rev Growth", _fmt(fund.get("revenueGrowth"), ".1f", multiply=100, suffix="%"))
-                f2.metric("Profit Margin", _fmt(fund.get("profitMargins"), ".1f", multiply=100, suffix="%"))
-                f3.metric("P/E (TTM)", _fmt(fund.get("trailingPE")))
-                f4.metric("P/E (Fwd)", _fmt(fund.get("forwardPE")))
-                f5.metric("Debt/Equity", _fmt(fund.get("debtToEquity")))
-                f6.metric("ROE", _fmt(fund.get("returnOnEquity"), ".1f", multiply=100, suffix="%"))
-
-                # Explanation
-                st.divider()
-                st.markdown(r.get("explanation", ""))
+            # Fundamentals row + confirmation + explanation
+            explanation_html = r.get("explanation", "").replace(chr(10), "<br>")
+            fund_html = textwrap.dedent(f'''\
+<div class="signal-card" style="margin-top:-12px; border-top-left-radius:0; border-top-right-radius:0;">
+<div class="metrics-grid metrics-grid-6">
+<div class="metric-box">
+<div class="metric-label">Rev Growth</div>
+<div class="metric-value {rev_class}">{rev_str}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">Margin</div>
+<div class="metric-value">{_fmt(fund.get("profitMargins"), ".1f", multiply=100, suffix="%")}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">P/E</div>
+<div class="metric-value">{_fmt(fund.get("trailingPE"))}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">Fwd P/E</div>
+<div class="metric-value">{_fmt(fund.get("forwardPE"))}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">D/E</div>
+<div class="metric-value">{_fmt(fund.get("debtToEquity"))}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">ROE</div>
+<div class="metric-value">{_fmt(fund.get("returnOnEquity"), ".1f", multiply=100, suffix="%")}</div>
+</div>
+</div>
+<div class="confirm-row">
+<span class="label">Confirmation:</span>
+<span class="value">{r.get("confirmed_candles", 3)}/{r.get("confirmed_candles", 3)} candles above SMA</span>
+<div class="confirm-checks">{checks_html}</div>
+</div>
+<div class="card-explanation">{explanation_html}</div>
+</div>''')
+            st.markdown(fund_html, unsafe_allow_html=True)
+            st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
 elif results is None:
     st.markdown("""
@@ -756,13 +1308,13 @@ if export_btn and results:
         )
 
 
-# ── Manual WhatsApp send ──
-if wa_send_btn and st.session_state.scan_results:
-    with st.spinner("Sending WhatsApp alert..."):
-        if send_whatsapp(wa_phone, st.session_state.scan_results):
-            st.success("WhatsApp alert sent successfully!")
+# ── Manual Telegram send ──
+if tg_send_btn and st.session_state.scan_results:
+    with st.spinner("Sending Telegram alert..."):
+        if send_telegram(st.session_state.scan_results, tg_token, tg_chat_id):
+            st.success("Telegram alert sent!")
         else:
-            st.error("Failed to send WhatsApp message. Check your phone number and API key.")
+            st.error("Failed to send. Check your bot token and chat ID.")
 
 
 # ── Scan history ──

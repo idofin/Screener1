@@ -1,0 +1,56 @@
+name: ReversalIQ Daily Scan
+
+on:
+  # Runs Mon-Fri at 22:30 UTC (6:30 PM ET / 5:30 PM CT)
+  schedule:
+    - cron: '30 22 * * 1-5'
+
+  # Also allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      stock_count:
+        description: 'Number of stocks to scan'
+        required: false
+        default: '3000'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install Pillow
+
+      - name: Restore previous results
+        uses: actions/cache@v4
+        with:
+          path: results/
+          key: scan-results-${{ github.run_number }}
+          restore-keys: |
+            scan-results-
+
+      - name: Run daily scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python daily_scan.py --telegram --count ${{ github.event.inputs.stock_count || '3000' }}
+
+      - name: Upload results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ github.run_number }}
+          path: results/
+          retention-days: 30

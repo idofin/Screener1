@@ -1,7 +1,14 @@
 import time
+import os
 import pandas as pd
 import yfinance as yf
-import streamlit as st
+
+# Allow running outside Streamlit (e.g. daily_scan.py)
+try:
+    import streamlit as st
+    _has_st = True
+except Exception:
+    _has_st = False
 
 from config import (
     BATCH_SIZE, BATCH_DELAY, CACHE_TTL, SCREENER_PAGE_SIZE,
@@ -9,7 +16,14 @@ from config import (
 )
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _cache(func):
+    """Apply st.cache_data only when running inside Streamlit."""
+    if _has_st and not os.environ.get("STREAMLIT_RUNTIME") == "0":
+        return st.cache_data(ttl=CACHE_TTL, show_spinner=False)(func)
+    return func
+
+
+@_cache
 def fetch_universe(universe_name: str, count: int) -> list[str]:
     """
     Get a list of stock tickers for the chosen universe.
@@ -18,26 +32,36 @@ def fetch_universe(universe_name: str, count: int) -> list[str]:
     if universe_name == "Custom":
         return []
 
+    # "All US Large-Cap" and "Russell 1000" use live screener
+    if universe_name in ("All US Large-Cap ($1B+)", "Russell 1000"):
+        try:
+            return _fetch_via_screener(count)
+        except Exception:
+            combined = list(dict.fromkeys(SP500_FALLBACK + NASDAQ100_FALLBACK))
+            return combined[:count]
+
     # Try hardcoded lists first for known universes (most reliable)
     if universe_name == "S&P 500":
         return SP500_FALLBACK[:count]
     if universe_name == "NASDAQ 100":
         return NASDAQ100_FALLBACK[:count]
 
-    # For Russell 1000 or other — use yfinance screener
+    # Fallback
     try:
         return _fetch_via_screener(count)
     except Exception:
-        # Ultimate fallback: merge both lists
         combined = list(dict.fromkeys(SP500_FALLBACK + NASDAQ100_FALLBACK))
         return combined[:count]
 
 
 def _fetch_via_screener(count: int) -> list[str]:
-    """Paginate through yfinance equity screener for large-cap US stocks."""
+    """Paginate through yfinance equity screener for US large-cap stocks."""
     from yfinance import EquityQuery
 
-    query = EquityQuery("gt", ["intradaymarketcap", 1_000_000_000])
+    query = EquityQuery("and", [
+        EquityQuery("gt", ["intradaymarketcap", 1_000_000_000]),
+        EquityQuery("eq", ["region", "us"]),
+    ])
     symbols = []
     offset = 0
 
@@ -65,7 +89,7 @@ def _fetch_via_screener(count: int) -> list[str]:
     return symbols[:count]
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+@_cache
 def fetch_price_data(symbols: tuple, period: str = "1y") -> dict:
     """
     Download OHLCV data in batches. Returns dict of symbol -> DataFrame.
@@ -101,7 +125,7 @@ def fetch_price_data(symbols: tuple, period: str = "1y") -> dict:
     return all_data
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+@_cache
 def fetch_fundamentals(symbol: str) -> dict:
     """Fetch fundamental data for a single stock."""
     try:

@@ -4,3 +4,4 @@ cache/
 results/
 *.egg-info/
 .env
+PyWhatKit_DB.txt

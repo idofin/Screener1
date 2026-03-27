@@ -14,6 +14,7 @@ SCREENER_PAGE_SIZE = 25
 
 # Universe presets
 UNIVERSE_OPTIONS = {
+    "All US Large-Cap ($1B+)": {"count": 3000, "exchanges": None},
     "S&P 500": {"count": 500, "exchanges": ["NMS", "NYQ"]},
     "NASDAQ 100": {"count": 100, "exchanges": ["NMS"]},
     "Russell 1000": {"count": 1000, "exchanges": None},

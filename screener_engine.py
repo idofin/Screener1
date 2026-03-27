@@ -22,6 +22,7 @@ def technical_screen(
     confirmation_candles: int = 3,
     lookback_days: int = 30,
     progress_callback=None,
+    stop_flag=None,
 ) -> list[dict]:
     """
     Screen stocks for reversal setup:
@@ -37,6 +38,8 @@ def technical_screen(
     symbols = list(price_data.keys())
 
     for idx, symbol in enumerate(symbols):
+        if stop_flag and stop_flag():
+            break
         if progress_callback:
             progress_callback(idx, len(symbols), f"Screening {symbol}...")
 
@@ -92,6 +95,12 @@ def technical_screen(
                                 confirmed += 1
 
                     if confirmed >= confirmation_candles:
+                        # Current price must still be above the current SMA
+                        current_price = close.iloc[-1]
+                        current_sma = smas[period].iloc[-1]
+                        if pd.isna(current_sma) or current_price < current_sma:
+                            continue
+
                         candidates.append({
                             "symbol": symbol,
                             "signal_date": df.index[i].strftime("%Y-%m-%d") if hasattr(df.index[i], "strftime") else str(df.index[i]),
@@ -119,7 +128,7 @@ def technical_screen(
     return candidates
 
 
-def fundamental_filter(candidates: list[dict], progress_callback=None) -> list[dict]:
+def fundamental_filter(candidates: list[dict], progress_callback=None, stop_flag=None) -> list[dict]:
     """
     Fetch fundamentals for each candidate, exclude negative revenue growth,
     and generate explanations.
@@ -127,6 +136,8 @@ def fundamental_filter(candidates: list[dict], progress_callback=None) -> list[d
     enriched = []
 
     for idx, c in enumerate(candidates):
+        if stop_flag and stop_flag():
+            break
         if progress_callback:
             progress_callback(idx, len(candidates), f"Analyzing {c['symbol']}...")
 
@@ -169,46 +180,25 @@ def _generate_explanation(candidate: dict, fundamentals: dict) -> str:
     high = candidate["high_52w"]
     confirmed = candidate["confirmed_candles"]
 
+    # Use HTML tags since this renders inside an HTML div
     lines = [
-        f"**{name} ({sym})** — {sector}",
-        "",
         f"On {signal_date}, {sym} triggered a reversal signal when RSI(14) dropped to "
-        f"**{rsi}** while the price (${price:,.2f}) was within **{sma_dist}%** of its "
-        f"**{sma_period}-day SMA** (${sma_val:,.2f}). The stock had pulled back "
-        f"**{pullback}%** from its 52-week high of ${high:,.2f}.",
+        f"<strong>{rsi}</strong> while the price (${price:,.2f}) was within "
+        f"<strong>{sma_dist}%</strong> of its <strong>{sma_period}-day SMA</strong> "
+        f"(${sma_val:,.2f}). The stock had pulled back <strong>{pullback}%</strong> "
+        f"from its 52-week high of ${high:,.2f}.",
         "",
-        f"The next **{confirmed} candle(s)** confirmed the reversal by closing above "
-        f"the {sma_period}-day SMA, signaling potential upside momentum.",
+        f"The next <strong>{confirmed} candle(s)</strong> confirmed the reversal by "
+        f"closing above the {sma_period}-day SMA, signaling potential upside momentum.",
     ]
 
-    # Fundamental context
+    # Investment thesis
+    
     rev_growth = fundamentals.get("revenueGrowth")
     profit_margin = fundamentals.get("profitMargins")
     pe = fundamentals.get("trailingPE")
-    fwd_pe = fundamentals.get("forwardPE")
     dte = fundamentals.get("debtToEquity")
-    roe = fundamentals.get("returnOnEquity")
 
-    fundamental_parts = []
-    if rev_growth is not None:
-        fundamental_parts.append(f"Revenue growth: **{rev_growth*100:.1f}%**")
-    if profit_margin is not None:
-        fundamental_parts.append(f"Profit margin: **{profit_margin*100:.1f}%**")
-    if pe is not None:
-        fundamental_parts.append(f"P/E (trailing): **{pe:.1f}**")
-    if fwd_pe is not None:
-        fundamental_parts.append(f"P/E (forward): **{fwd_pe:.1f}**")
-    if dte is not None:
-        fundamental_parts.append(f"Debt/Equity: **{dte:.1f}**")
-    if roe is not None:
-        fundamental_parts.append(f"ROE: **{roe*100:.1f}%**")
-
-    if fundamental_parts:
-        lines.append("")
-        lines.append("**Fundamentals:** " + " | ".join(fundamental_parts))
-
-    # Investment thesis
-    lines.append("")
     thesis_parts = []
     if rev_growth is not None and rev_growth > 0.1:
         thesis_parts.append("strong revenue growth")
@@ -224,11 +214,10 @@ def _generate_explanation(candidate: dict, fundamentals: dict) -> str:
         thesis_parts.append("manageable debt levels")
 
     if thesis_parts:
+        lines.append("")
         lines.append(
             f"The fundamental picture supports the technical setup with "
             f"{', '.join(thesis_parts)}."
         )
-    else:
-        lines.append("Review the fundamentals above to assess the full investment case.")
 
     return "\n".join(lines)
