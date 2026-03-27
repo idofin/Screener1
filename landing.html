@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ReversalIQ — Smart Stock Reversal Screener</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef7ff',
+                            100: '#d9edff',
+                            200: '#bce0ff',
+                            300: '#8eceff',
+                            400: '#59b2ff',
+                            500: '#3b91ff',
+                            600: '#1a6ff5',
+                            700: '#1459e1',
+                            800: '#1748b6',
+                            900: '#193f8f',
+                            950: '#142857',
+                        },
+                        surface: {
+                            0: '#05060a',
+                            50: '#0a0d14',
+                            100: '#0f1219',
+                            200: '#151a24',
+                            300: '#1c2231',
+                            400: '#252d3f',
+                            500: '#334155',
+                        },
+                        up: '#22c55e',
+                        down: '#ef4444',
+                    },
+                    fontFamily: {
+                        sans: ['"Inter"', 'system-ui', '-apple-system', 'sans-serif'],
+                        mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body { background: #05060a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; }
+
+        /* Animated gradient mesh background */
+        .hero-bg {
+            position: absolute; inset: 0; overflow: hidden; z-index: 0;
+        }
+        .hero-bg::before {
+            content: '';
+            position: absolute;
+            width: 150%; height: 150%;
+            top: -25%; left: -25%;
+            background:
+                radial-gradient(ellipse 600px 400px at 20% 30%, rgba(27, 99, 245, 0.12) 0%, transparent 70%),
+                radial-gradient(ellipse 500px 500px at 75% 20%, rgba(99, 50, 255, 0.08) 0%, transparent 70%),
+                radial-gradient(ellipse 400px 300px at 50% 80%, rgba(34, 197, 94, 0.06) 0%, transparent 70%);
+            animation: meshFloat 20s ease-in-out infinite alternate;
+        }
+        @keyframes meshFloat {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            100% { transform: translate(-30px, 20px) rotate(2deg); }
+        }
+
+        /* Grid pattern overlay */
+        .grid-overlay {
+            position: absolute; inset: 0; z-index: 1;
+            background-image:
+                linear-gradient(rgba(59, 145, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 145, 255, 0.03) 1px, transparent 1px);
+            background-size: 64px 64px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black, transparent);
+        }
+
+        /* Glow effects */
+        .glow-blue { filter: drop-shadow(0 0 20px rgba(59, 145, 255, 0.3)); }
+        .glow-green { filter: drop-shadow(0 0 20px rgba(34, 197, 94, 0.3)); }
+
+        /* Glassmorphism cards */
+        .glass {
+            background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            border: 1px solid rgba(255,255,255,0.06);
+            backdrop-filter: blur(20px);
+        }
+        .glass:hover {
+            border-color: rgba(59, 145, 255, 0.15);
+            background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+        }
+
+        /* Live chart animation */
+        .chart-line {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: drawLine 3s ease-out forwards;
+        }
+        @keyframes drawLine { to { stroke-dashoffset: 0; } }
+
+        /* Pulse ring on CTA */
+        .pulse-ring {
+            position: absolute; inset: -4px; border-radius: 12px;
+            border: 2px solid rgba(59, 145, 255, 0.4);
+            animation: pulseRing 2.5s ease-out infinite;
+        }
+        @keyframes pulseRing {
+            0% { transform: scale(1); opacity: 0.6; }
+            100% { transform: scale(1.08); opacity: 0; }
+        }
+
+        /* Floating badge */
+        .float { animation: float 6s ease-in-out infinite; }
+        .float-delay { animation: float 6s ease-in-out 2s infinite; }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-12px); }
+        }
+
+        /* Metric counter animation */
+        .counter { font-variant-numeric: tabular-nums; }
+
+        /* Scroll reveal */
+        .reveal {
+            opacity: 0; transform: translateY(30px);
+            transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .reveal.visible { opacity: 1; transform: translateY(0); }
+
+        /* Ticker tape */
+        .ticker-tape {
+            display: flex; gap: 48px; white-space: nowrap;
+            animation: tickerScroll 30s linear infinite;
+        }
+        @keyframes tickerScroll {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+
+        /* Signal card shimmer */
+        .shimmer {
+            position: relative; overflow: hidden;
+        }
+        .shimmer::after {
+            content: '';
+            position: absolute; inset: 0;
+            background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.03) 45%, rgba(255,255,255,0.05) 50%, rgba(255,255,255,0.03) 55%, transparent 60%);
+            animation: shimmer 5s ease-in-out infinite;
+        }
+        @keyframes shimmer {
+            0%, 100% { transform: translateX(-100%); }
+            50% { transform: translateX(100%); }
+        }
+
+        /* Smooth nav */
+        .nav-blur {
+            background: rgba(5, 6, 10, 0.7);
+            backdrop-filter: blur(16px) saturate(180%);
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0d14; }
+        ::-webkit-scrollbar-thumb { background: #252d3f; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+        /* Candlestick mini chart */
+        .candle-green { fill: #22c55e; }
+        .candle-red { fill: #ef4444; }
+        .candle-wick-green { stroke: #22c55e; stroke-width: 1.5; }
+        .candle-wick-red { stroke: #ef4444; stroke-width: 1.5; }
+    </style>
+</head>
+<body>
+
+<!-- ========== NAVIGATION ========== -->
+<nav class="nav-blur fixed top-0 w-full z-50 transition-all duration-300" id="nav">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <a href="#" class="flex items-center gap-3 group">
+            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-500/20 group-hover:shadow-brand-500/40 transition-shadow">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8M14 7h7v7"/>
+                </svg>
+            </div>
+            <span class="text-lg font-bold text-white tracking-tight">Reversal<span class="text-brand-400">IQ</span></span>
+        </a>
+        <div class="hidden md:flex items-center gap-8 text-sm text-slate-400">
+            <a href="#features" class="hover:text-white transition-colors">Features</a>
+            <a href="#how-it-works" class="hover:text-white transition-colors">How It Works</a>
+            <a href="#signals" class="hover:text-white transition-colors">Live Signals</a>
+            <a href="#pricing" class="hover:text-white transition-colors">Pricing</a>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="http://localhost:8501" class="hidden sm:block text-sm text-slate-300 hover:text-white px-4 py-2 transition-colors">Open App</a>
+            <a href="http://localhost:8501" class="text-sm font-medium text-white bg-brand-600 hover:bg-brand-500 px-5 py-2.5 rounded-lg transition-all hover:shadow-lg hover:shadow-brand-600/25">
+                Launch Screener
+            </a>
+        </div>
+    </div>
+</nav>
+
+<!-- ========== HERO ========== -->
+<section class="relative min-h-screen flex items-center pt-20">
+    <div class="hero-bg"></div>
+    <div class="grid-overlay"></div>
+
+    <div class="relative z-10 max-w-7xl mx-auto px-6 py-20 grid lg:grid-cols-2 gap-16 items-center">
+        <!-- Left: Copy -->
+        <div>
+            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs font-medium text-brand-300 mb-6">
+                <span class="w-2 h-2 rounded-full bg-up animate-pulse"></span>
+                Live screening 3,000+ large-cap stocks
+            </div>
+
+            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-[1.05] tracking-tight text-white mb-6">
+                Catch the<br>
+                <span class="bg-gradient-to-r from-brand-400 via-brand-300 to-cyan-400 bg-clip-text text-transparent">Reversal.</span><br>
+                Before the Crowd.
+            </h1>
+
+            <p class="text-lg text-slate-400 max-w-xl mb-10 leading-relaxed">
+                AI-powered screener that finds large-cap stocks bouncing off the 150 & 200-day SMA with RSI confirmation and full fundamental analysis. No noise. Just high-probability setups.
+            </p>
+
+            <div class="flex flex-col sm:flex-row gap-4 mb-12">
+                <a href="http://localhost:8501" class="relative group inline-flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-500 text-white font-semibold px-8 py-4 rounded-xl transition-all hover:shadow-2xl hover:shadow-brand-600/20">
+                    <span class="pulse-ring"></span>
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    Start Screening Free
+                </a>
+                <a href="#how-it-works" class="inline-flex items-center justify-center gap-2 text-slate-300 hover:text-white font-medium px-8 py-4 rounded-xl border border-slate-700/50 hover:border-slate-600 transition-all">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    See How It Works
+                </a>
+            </div>
+
+            <!-- Trust metrics -->
+            <div class="flex items-center gap-8 text-sm text-slate-500">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-up" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    <span>Free tier available</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-up" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    <span>WhatsApp alerts</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-up" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    <span>No credit card</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Live signal card -->
+        <div class="relative float">
+            <div class="glass rounded-2xl p-6 shadow-2xl shadow-black/40 shimmer">
+                <!-- Header -->
+                <div class="flex items-center justify-between mb-5">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center font-mono font-bold text-sm text-white">N</div>
+                        <div>
+                            <div class="font-semibold text-white">NVDA</div>
+                            <div class="text-xs text-slate-400">NVIDIA Corporation</div>
+                        </div>
+                    </div>
+                    <div class="px-3 py-1 rounded-full bg-up/10 text-up text-xs font-semibold flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-up animate-pulse"></span>
+                        Reversal Signal
+                    </div>
+                </div>
+
+                <!-- Mini candlestick chart -->
+                <div class="bg-surface-100 rounded-xl p-4 mb-5">
+                    <svg viewBox="0 0 400 120" class="w-full h-32" id="heroChart">
+                        <!-- SMA line drawn by JS -->
+                        <!-- Candles drawn by JS -->
+                    </svg>
+                    <div class="flex items-center justify-between mt-2 text-xs text-slate-500">
+                        <span>90 days</span>
+                        <div class="flex items-center gap-4">
+                            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-orange-400 inline-block rounded"></span> SMA-200</span>
+                            <span class="flex items-center gap-1"><span class="w-3 h-0.5 bg-brand-400 inline-block rounded"></span> RSI Signal</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Metrics grid -->
+                <div class="grid grid-cols-3 gap-3 mb-5">
+                    <div class="bg-surface-100 rounded-lg p-3 text-center">
+                        <div class="text-xs text-slate-500 mb-1">RSI</div>
+                        <div class="text-lg font-bold text-brand-400 font-mono">27.4</div>
+                    </div>
+                    <div class="bg-surface-100 rounded-lg p-3 text-center">
+                        <div class="text-xs text-slate-500 mb-1">Pullback</div>
+                        <div class="text-lg font-bold text-down font-mono">-18.2%</div>
+                    </div>
+                    <div class="bg-surface-100 rounded-lg p-3 text-center">
+                        <div class="text-xs text-slate-500 mb-1">SMA Dist</div>
+                        <div class="text-lg font-bold text-up font-mono">0.8%</div>
+                    </div>
+                </div>
+
+                <!-- Fundamentals -->
+                <div class="grid grid-cols-4 gap-2 text-center">
+                    <div class="bg-surface-100 rounded-lg p-2">
+                        <div class="text-[10px] text-slate-500 uppercase tracking-wider">Rev Growth</div>
+                        <div class="text-sm font-semibold text-up font-mono mt-0.5">+122%</div>
+                    </div>
+                    <div class="bg-surface-100 rounded-lg p-2">
+                        <div class="text-[10px] text-slate-500 uppercase tracking-wider">P/E</div>
+                        <div class="text-sm font-semibold text-white font-mono mt-0.5">38.2</div>
+                    </div>
+                    <div class="bg-surface-100 rounded-lg p-2">
+                        <div class="text-[10px] text-slate-500 uppercase tracking-wider">Margin</div>
+                        <div class="text-sm font-semibold text-up font-mono mt-0.5">55.8%</div>
+                    </div>
+                    <div class="bg-surface-100 rounded-lg p-2">
+                        <div class="text-[10px] text-slate-500 uppercase tracking-wider">D/E</div>
+                        <div class="text-sm font-semibold text-white font-mono mt-0.5">0.41</div>
+                    </div>
+                </div>
+
+                <!-- Confirmation -->
+                <div class="mt-4 flex items-center gap-2 text-xs">
+                    <span class="text-slate-500">Confirmation:</span>
+                    <span class="text-up font-medium">3/3 candles above SMA</span>
+                    <div class="flex gap-1 ml-auto">
+                        <div class="w-5 h-5 rounded bg-up/20 flex items-center justify-center"><svg class="w-3 h-3 text-up" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg></div>
+                        <div class="w-5 h-5 rounded bg-up/20 flex items-center justify-center"><svg class="w-3 h-3 text-up" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg></div>
+                        <div class="w-5 h-5 rounded bg-up/20 flex items-center justify-center"><svg class="w-3 h-3 text-up" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Floating WhatsApp badge -->
+            <div class="absolute -bottom-6 -left-6 glass rounded-xl px-4 py-3 flex items-center gap-3 float-delay shadow-xl shadow-black/30">
+                <div class="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center">
+                    <svg class="w-4 h-4 text-green-400" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                </div>
+                <div>
+                    <div class="text-xs font-semibold text-white">WhatsApp Alert Sent</div>
+                    <div class="text-[10px] text-slate-400">NVDA reversal signal detected</div>
+                </div>
+            </div>
+
+            <!-- Floating RSI badge -->
+            <div class="absolute -top-4 -right-4 glass rounded-xl px-4 py-3 float shadow-xl shadow-black/30">
+                <div class="text-[10px] text-slate-400 uppercase tracking-wider mb-1">RSI Oversold</div>
+                <div class="flex items-center gap-2">
+                    <div class="h-1.5 w-24 bg-surface-300 rounded-full overflow-hidden">
+                        <div class="h-full w-[27%] bg-gradient-to-r from-down to-orange-400 rounded-full"></div>
+                    </div>
+                    <span class="text-sm font-bold text-brand-400 font-mono">27.4</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== TICKER TAPE ========== -->
+<div class="border-y border-slate-800/50 bg-surface-50/50 py-3 overflow-hidden">
+    <div class="ticker-tape" id="tickerTape">
+        <!-- Populated by JS -->
+    </div>
+</div>
+
+<!-- ========== FEATURES ========== -->
+<section id="features" class="py-28">
+    <div class="max-w-7xl mx-auto px-6">
+        <div class="text-center mb-20 reveal">
+            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs font-medium text-brand-300 mb-4">
+                Core Engine
+            </div>
+            <h2 class="text-4xl sm:text-5xl font-extrabold text-white mb-5 tracking-tight">Technical Precision Meets<br>Fundamental Depth</h2>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">Every signal is validated by a multi-layer screening engine. No single-indicator guesswork.</p>
+        </div>
+
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Feature 1 -->
+            <div class="glass rounded-2xl p-7 transition-all duration-300 hover:-translate-y-1 reveal group">
+                <div class="w-12 h-12 rounded-xl bg-brand-600/10 flex items-center justify-center mb-5 group-hover:bg-brand-600/20 transition-colors">
+                    <svg class="w-6 h-6 text-brand-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6"/></svg>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">150 & 200 SMA Bounce</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Detects when price touches the 150 or 200-day moving average within a configurable proximity band. These institutional support levels are where smart money accumulates.</p>
+            </div>
+
+            <!-- Feature 2 -->
+            <div class="glass rounded-2xl p-7 transition-all duration-300 hover:-translate-y-1 reveal group">
+                <div class="w-12 h-12 rounded-xl bg-purple-600/10 flex items-center justify-center mb-5 group-hover:bg-purple-600/20 transition-colors">
+                    <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z"/></svg>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">RSI Oversold Confirmation</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Requires RSI(14) to drop below your threshold (default 30) before confirming the bounce. Filters out weak pullbacks and catches genuine oversold reversals.</p>
+            </div>
+
+            <!-- Feature 3 -->
+            <div class="glass rounded-2xl p-7 transition-all duration-300 hover:-translate-y-1 reveal group">
+                <div class="w-12 h-12 rounded-xl bg-up/10 flex items-center justify-center mb-5 group-hover:bg-up/20 transition-colors">
+                    <svg class="w-6 h-6 text-up" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">Candle Confirmation</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Waits for 2-3 consecutive candles to close above the SMA before flagging the signal. This reduces false positives and confirms directional momentum.</p>
+            </div>
+
+            <!-- Feature 4 -->
+            <div class="glass rounded-2xl p-7 transition-all duration-300 hover:-translate-y-1 reveal group">
+                <div class="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center mb-5 group-hover:bg-orange-500/20 transition-colors">
+                    <svg class="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z"/></svg>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">Deep Fundamentals</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Revenue growth, profit margins, P/E ratios, debt-to-equity, ROE. Automatically excludes companies with negative revenue growth. Full investment thesis per stock.</p>
+            </div>
+
+            <!-- Feature 5 -->
+            <div class="glass rounded-2xl p-7 transition-all duration-300 hover:-translate-y-1 reveal group">
+                <div class="w-12 h-12 rounded-xl bg-cyan-500/10 flex items-center justify-center mb-5 group-hover:bg-cyan-500/20 transition-colors">
+                    <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">WhatsApp Alerts</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Get instant WhatsApp notifications when high-probability setups trigger. Never miss a reversal while you sleep. Free via CallMeBot integration.</p>
+            </div>
+
+            <!-- Feature 6 -->
+            <div class="glass rounded-2xl p-7 transition-all duration-300 hover:-translate-y-1 reveal group">
+                <div class="w-12 h-12 rounded-xl bg-rose-500/10 flex items-center justify-center mb-5 group-hover:bg-rose-500/20 transition-colors">
+                    <svg class="w-6 h-6 text-rose-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+                </div>
+                <h3 class="text-lg font-bold text-white mb-2">Multi-Universe Scanning</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Scan S&P 500, NASDAQ 100, Russell 1000, or paste your own custom watchlist. Choose scan depth from 50 to 500+ stocks per run.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== HOW IT WORKS ========== -->
+<section id="how-it-works" class="py-28 relative">
+    <div class="absolute inset-0 bg-gradient-to-b from-transparent via-brand-950/10 to-transparent pointer-events-none"></div>
+    <div class="max-w-7xl mx-auto px-6 relative">
+        <div class="text-center mb-20 reveal">
+            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs font-medium text-brand-300 mb-4">
+                The Algorithm
+            </div>
+            <h2 class="text-4xl sm:text-5xl font-extrabold text-white mb-5 tracking-tight">4-Layer Signal Validation</h2>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">Every stock passes through four independent filters. Only the strongest setups survive.</p>
+        </div>
+
+        <div class="grid md:grid-cols-4 gap-6 relative">
+            <!-- Connector line -->
+            <div class="hidden md:block absolute top-16 left-[12.5%] right-[12.5%] h-px bg-gradient-to-r from-brand-600/50 via-purple-500/50 via-up/50 to-orange-500/50"></div>
+
+            <div class="reveal text-center">
+                <div class="w-14 h-14 rounded-2xl bg-brand-600/20 border border-brand-500/30 flex items-center justify-center mx-auto mb-5 relative z-10">
+                    <span class="text-2xl font-extrabold text-brand-400 font-mono">1</span>
+                </div>
+                <h3 class="font-bold text-white mb-2">Pullback Filter</h3>
+                <p class="text-sm text-slate-400">Stock must be 12-15%+ below its 52-week high. Filters for meaningful corrections, not minor dips.</p>
+            </div>
+
+            <div class="reveal text-center" style="transition-delay: 100ms;">
+                <div class="w-14 h-14 rounded-2xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center mx-auto mb-5 relative z-10">
+                    <span class="text-2xl font-extrabold text-purple-400 font-mono">2</span>
+                </div>
+                <h3 class="font-bold text-white mb-2">SMA Support</h3>
+                <p class="text-sm text-slate-400">Price is within 2% of the 150 or 200-day SMA. These are the institutional buying zones.</p>
+            </div>
+
+            <div class="reveal text-center" style="transition-delay: 200ms;">
+                <div class="w-14 h-14 rounded-2xl bg-up/20 border border-up/30 flex items-center justify-center mx-auto mb-5 relative z-10">
+                    <span class="text-2xl font-extrabold text-up font-mono">3</span>
+                </div>
+                <h3 class="font-bold text-white mb-2">RSI + Confirmation</h3>
+                <p class="text-sm text-slate-400">RSI below 30 confirms oversold. Then 3 candles must close above the SMA to prove the bounce.</p>
+            </div>
+
+            <div class="reveal text-center" style="transition-delay: 300ms;">
+                <div class="w-14 h-14 rounded-2xl bg-orange-500/20 border border-orange-500/30 flex items-center justify-center mx-auto mb-5 relative z-10">
+                    <span class="text-2xl font-extrabold text-orange-400 font-mono">4</span>
+                </div>
+                <h3 class="font-bold text-white mb-2">Fundamental Check</h3>
+                <p class="text-sm text-slate-400">Revenue growth must be positive. P/E, margins, and debt are scored to validate the business case.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== LIVE SIGNALS DEMO ========== -->
+<section id="signals" class="py-28">
+    <div class="max-w-7xl mx-auto px-6">
+        <div class="text-center mb-16 reveal">
+            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs font-medium text-up mb-4">
+                <span class="w-2 h-2 rounded-full bg-up animate-pulse"></span>
+                Sample Output
+            </div>
+            <h2 class="text-4xl sm:text-5xl font-extrabold text-white mb-5 tracking-tight">What You'll See</h2>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">Each signal comes with a full breakdown — technical setup, candlestick chart, and fundamental deep-dive.</p>
+        </div>
+
+        <!-- Signal cards -->
+        <div class="grid lg:grid-cols-2 gap-6">
+            <div class="glass rounded-2xl overflow-hidden reveal" id="signal1">
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center font-mono font-bold text-sm text-white">A</div>
+                            <div>
+                                <div class="font-bold text-white">AAPL <span class="text-xs font-normal text-slate-400 ml-1">Apple Inc.</span></div>
+                                <div class="text-xs text-slate-500">Technology | Consumer Electronics</div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm font-mono font-bold text-white">$185.40</div>
+                            <div class="text-xs text-down font-mono">-14.2% from high</div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-5 gap-2 mb-4">
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">Signal</div>
+                            <div class="text-xs font-semibold text-white mt-0.5">Mar 20</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">RSI</div>
+                            <div class="text-xs font-semibold text-brand-400 font-mono mt-0.5">28.3</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">SMA</div>
+                            <div class="text-xs font-semibold text-orange-400 font-mono mt-0.5">200d</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">Rev</div>
+                            <div class="text-xs font-semibold text-up font-mono mt-0.5">+15.7%</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">P/E</div>
+                            <div class="text-xs font-semibold text-white font-mono mt-0.5">32.1</div>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">AAPL triggered a reversal signal when RSI(14) dropped to <span class="text-brand-300">28.3</span> while the price was within <span class="text-brand-300">1.2%</span> of its 200-day SMA. Revenue growing at 15.7% with 27% profit margins.</p>
+                </div>
+            </div>
+
+            <div class="glass rounded-2xl overflow-hidden reveal" style="transition-delay: 150ms;" id="signal2">
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-green-600 to-green-800 flex items-center justify-center font-mono font-bold text-sm text-white">M</div>
+                            <div>
+                                <div class="font-bold text-white">MSFT <span class="text-xs font-normal text-slate-400 ml-1">Microsoft Corp.</span></div>
+                                <div class="text-xs text-slate-500">Technology | Software</div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm font-mono font-bold text-white">$378.20</div>
+                            <div class="text-xs text-down font-mono">-16.8% from high</div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-5 gap-2 mb-4">
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">Signal</div>
+                            <div class="text-xs font-semibold text-white mt-0.5">Mar 22</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">RSI</div>
+                            <div class="text-xs font-semibold text-brand-400 font-mono mt-0.5">26.1</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">SMA</div>
+                            <div class="text-xs font-semibold text-orange-400 font-mono mt-0.5">150d</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">Rev</div>
+                            <div class="text-xs font-semibold text-up font-mono mt-0.5">+12.3%</div>
+                        </div>
+                        <div class="bg-surface-100 rounded-lg p-2 text-center">
+                            <div class="text-[10px] text-slate-500">P/E</div>
+                            <div class="text-xs font-semibold text-white font-mono mt-0.5">28.4</div>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">MSFT bounced off the 150-day SMA with RSI at <span class="text-brand-300">26.1</span>. Strong cloud revenue growth at 12.3% with operating margins above 40%. Debt levels manageable at 0.35 D/E ratio.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== STATS BAR ========== -->
+<section class="py-16 border-y border-slate-800/50">
+    <div class="max-w-7xl mx-auto px-6">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+            <div class="reveal">
+                <div class="text-4xl font-extrabold text-white font-mono counter" data-target="3247">0</div>
+                <div class="text-sm text-slate-400 mt-1">Stocks Scanned Daily</div>
+            </div>
+            <div class="reveal" style="transition-delay: 100ms;">
+                <div class="text-4xl font-extrabold text-white font-mono counter" data-target="150">0</div>
+                <div class="text-sm text-slate-400 mt-1">SMA & 200 SMA Tracked</div>
+            </div>
+            <div class="reveal" style="transition-delay: 200ms;">
+                <div class="text-4xl font-extrabold text-white font-mono"><span class="counter" data-target="12">0</span>+</div>
+                <div class="text-sm text-slate-400 mt-1">Fundamental Metrics</div>
+            </div>
+            <div class="reveal" style="transition-delay: 300ms;">
+                <div class="text-4xl font-extrabold text-up font-mono">Real-time</div>
+                <div class="text-sm text-slate-400 mt-1">WhatsApp Alerts</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== PRICING ========== -->
+<section id="pricing" class="py-28">
+    <div class="max-w-7xl mx-auto px-6">
+        <div class="text-center mb-16 reveal">
+            <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs font-medium text-brand-300 mb-4">
+                Simple Pricing
+            </div>
+            <h2 class="text-4xl sm:text-5xl font-extrabold text-white mb-5 tracking-tight">Start Free. Scale When Ready.</h2>
+            <p class="text-slate-400 text-lg">No credit card required. Runs locally on your machine.</p>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+            <!-- Free -->
+            <div class="glass rounded-2xl p-8 reveal">
+                <div class="text-sm font-semibold text-slate-400 mb-2">Starter</div>
+                <div class="flex items-baseline gap-1 mb-1">
+                    <span class="text-4xl font-extrabold text-white">$0</span>
+                    <span class="text-slate-500 text-sm">/forever</span>
+                </div>
+                <p class="text-sm text-slate-500 mb-8">Perfect for getting started</p>
+                <ul class="space-y-3 mb-8">
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Scan up to 100 stocks
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        S&P 500 & NASDAQ 100
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        CSV export
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-500">
+                        <svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+                        <span class="line-through">WhatsApp alerts</span>
+                    </li>
+                </ul>
+                <a href="http://localhost:8501" class="block w-full text-center py-3 rounded-xl border border-slate-700 text-sm font-medium text-slate-300 hover:border-slate-500 hover:text-white transition-all">Get Started</a>
+            </div>
+
+            <!-- Pro (highlighted) -->
+            <div class="relative glass rounded-2xl p-8 reveal border-brand-500/30" style="transition-delay: 100ms;">
+                <div class="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-brand-600 text-xs font-semibold text-white">Most Popular</div>
+                <div class="text-sm font-semibold text-brand-400 mb-2">Pro</div>
+                <div class="flex items-baseline gap-1 mb-1">
+                    <span class="text-4xl font-extrabold text-white">$29</span>
+                    <span class="text-slate-500 text-sm">/month</span>
+                </div>
+                <p class="text-sm text-slate-500 mb-8">For serious investors</p>
+                <ul class="space-y-3 mb-8">
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Scan up to 500 stocks
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        All universes + custom
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        WhatsApp alerts
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Candlestick charts
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Scan history & comparison
+                    </li>
+                </ul>
+                <a href="http://localhost:8501" class="block w-full text-center py-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-sm font-semibold text-white transition-all shadow-lg shadow-brand-600/20 hover:shadow-brand-500/30">Start Free Trial</a>
+            </div>
+
+            <!-- Enterprise -->
+            <div class="glass rounded-2xl p-8 reveal" style="transition-delay: 200ms;">
+                <div class="text-sm font-semibold text-slate-400 mb-2">Enterprise</div>
+                <div class="flex items-baseline gap-1 mb-1">
+                    <span class="text-4xl font-extrabold text-white">$99</span>
+                    <span class="text-slate-500 text-sm">/month</span>
+                </div>
+                <p class="text-sm text-slate-500 mb-8">For funds & teams</p>
+                <ul class="space-y-3 mb-8">
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Unlimited stocks
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        API access
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Multi-user team seats
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Custom screening rules
+                    </li>
+                    <li class="flex items-center gap-3 text-sm text-slate-300">
+                        <svg class="w-4 h-4 text-up flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                        Priority support
+                    </li>
+                </ul>
+                <a href="http://localhost:8501" class="block w-full text-center py-3 rounded-xl border border-slate-700 text-sm font-medium text-slate-300 hover:border-slate-500 hover:text-white transition-all">Contact Sales</a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ========== CTA ========== -->
+<section id="cta" class="py-28 relative">
+    <div class="absolute inset-0 overflow-hidden">
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-brand-600/8 rounded-full blur-[120px]"></div>
+    </div>
+    <div class="max-w-3xl mx-auto px-6 text-center relative reveal">
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-white mb-6 tracking-tight">Ready to Catch<br>the Next Reversal?</h2>
+        <p class="text-lg text-slate-400 mb-10 max-w-xl mx-auto">Launch the screener locally in one command. Your data stays on your machine. No cloud. No subscriptions to start.</p>
+
+        <div class="glass rounded-xl p-6 mb-8 text-left max-w-lg mx-auto">
+            <div class="flex items-center gap-2 mb-3">
+                <div class="w-3 h-3 rounded-full bg-red-500/70"></div>
+                <div class="w-3 h-3 rounded-full bg-yellow-500/70"></div>
+                <div class="w-3 h-3 rounded-full bg-green-500/70"></div>
+                <span class="text-xs text-slate-500 ml-2 font-mono">terminal</span>
+            </div>
+            <code class="text-sm font-mono block">
+                <span class="text-slate-500">$</span> <span class="text-brand-300">pip install</span> <span class="text-slate-300">-r requirements.txt</span><br>
+                <span class="text-slate-500">$</span> <span class="text-brand-300">streamlit run</span> <span class="text-slate-300">app.py</span><br>
+                <span class="text-up">Ready at http://localhost:8501</span>
+            </code>
+        </div>
+
+        <a href="http://localhost:8501" class="inline-flex items-center gap-2 bg-brand-600 hover:bg-brand-500 text-white font-semibold px-10 py-4 rounded-xl transition-all hover:shadow-2xl hover:shadow-brand-600/20 text-lg">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Launch Screener
+        </a>
+    </div>
+</section>
+
+<!-- ========== FOOTER ========== -->
+<footer class="border-t border-slate-800/50 py-12">
+    <div class="max-w-7xl mx-auto px-6">
+        <div class="flex flex-col md:flex-row items-center justify-between gap-6">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8M14 7h7v7"/></svg>
+                </div>
+                <span class="text-sm font-semibold text-white">Reversal<span class="text-brand-400">IQ</span></span>
+            </div>
+            <div class="flex items-center gap-8 text-sm text-slate-500">
+                <a href="#features" class="hover:text-slate-300 transition-colors">Features</a>
+                <a href="#how-it-works" class="hover:text-slate-300 transition-colors">How It Works</a>
+                <a href="#pricing" class="hover:text-slate-300 transition-colors">Pricing</a>
+            </div>
+            <div class="text-sm text-slate-600">
+                Not financial advice. For educational purposes only.
+            </div>
+        </div>
+    </div>
+</footer>
+
+<script>
+// ========== HERO CANDLESTICK CHART ==========
+(function() {
+    const svg = document.getElementById('heroChart');
+    if (!svg) return;
+
+    // Generate realistic price data with a dip and recovery
+    const days = 60;
+    let prices = [];
+    let price = 140;
+    for (let i = 0; i < days; i++) {
+        if (i < 25) price += (Math.random() - 0.45) * 3;       // drift up
+        else if (i < 40) price -= (Math.random() * 2.5 + 0.3); // sell-off
+        else if (i === 40) price = price;                       // bottom
+        else price += (Math.random() - 0.35) * 2.5;            // recovery
+
+        const open = price + (Math.random() - 0.5) * 2;
+        const close = price + (Math.random() - 0.5) * 2;
+        const high = Math.max(open, close) + Math.random() * 2;
+        const low = Math.min(open, close) - Math.random() * 2;
+        prices.push({ o: open, h: high, l: low, c: close });
+    }
+
+    const allHighs = prices.map(p => p.h);
+    const allLows = prices.map(p => p.l);
+    const maxP = Math.max(...allHighs);
+    const minP = Math.min(...allLows);
+    const range = maxP - minP;
+    const W = 400, H = 120, pad = 8;
+    const candleW = (W - pad * 2) / days;
+
+    function yScale(v) {
+        return pad + (1 - (v - minP) / range) * (H - pad * 2);
+    }
+
+    // SMA line (20-period for visual)
+    const smaPeriod = 20;
+    let smaPoints = [];
+    for (let i = smaPeriod - 1; i < days; i++) {
+        let sum = 0;
+        for (let j = i - smaPeriod + 1; j <= i; j++) sum += prices[j].c;
+        const avg = sum / smaPeriod;
+        const x = pad + (i + 0.5) * candleW;
+        smaPoints.push(`${x},${yScale(avg)}`);
+    }
+    const smaLine = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    smaLine.setAttribute('points', smaPoints.join(' '));
+    smaLine.setAttribute('fill', 'none');
+    smaLine.setAttribute('stroke', '#fb923c');
+    smaLine.setAttribute('stroke-width', '1.5');
+    smaLine.setAttribute('opacity', '0.7');
+    smaLine.classList.add('chart-line');
+    svg.appendChild(smaLine);
+
+    // Candles
+    prices.forEach((p, i) => {
+        const x = pad + i * candleW;
+        const isGreen = p.c >= p.o;
+        const color = isGreen ? '#22c55e' : '#ef4444';
+        const bodyTop = yScale(Math.max(p.o, p.c));
+        const bodyBot = yScale(Math.min(p.o, p.c));
+        const bodyH = Math.max(bodyBot - bodyTop, 1);
+
+        // Wick
+        const wick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        wick.setAttribute('x1', x + candleW / 2);
+        wick.setAttribute('x2', x + candleW / 2);
+        wick.setAttribute('y1', yScale(p.h));
+        wick.setAttribute('y2', yScale(p.l));
+        wick.setAttribute('stroke', color);
+        wick.setAttribute('stroke-width', '1');
+        wick.setAttribute('opacity', '0.6');
+        svg.appendChild(wick);
+
+        // Body
+        const body = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        body.setAttribute('x', x + 1);
+        body.setAttribute('y', bodyTop);
+        body.setAttribute('width', Math.max(candleW - 2, 2));
+        body.setAttribute('height', bodyH);
+        body.setAttribute('fill', color);
+        body.setAttribute('rx', '1');
+        body.setAttribute('opacity', '0.85');
+        svg.appendChild(body);
+    });
+
+    // Signal marker
+    const sigIdx = 40;
+    const sigX = pad + (sigIdx + 0.5) * candleW;
+    const sigY = yScale(prices[sigIdx].l) + 10;
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    marker.setAttribute('cx', sigX);
+    marker.setAttribute('cy', sigY);
+    marker.setAttribute('r', '4');
+    marker.setAttribute('fill', '#3b91ff');
+    marker.setAttribute('opacity', '0.9');
+    svg.appendChild(marker);
+
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    ring.setAttribute('cx', sigX);
+    ring.setAttribute('cy', sigY);
+    ring.setAttribute('r', '8');
+    ring.setAttribute('fill', 'none');
+    ring.setAttribute('stroke', '#3b91ff');
+    ring.setAttribute('stroke-width', '1');
+    ring.setAttribute('opacity', '0.4');
+    const anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate');
+    anim.setAttribute('attributeName', 'r');
+    anim.setAttribute('from', '6');
+    anim.setAttribute('to', '14');
+    anim.setAttribute('dur', '2s');
+    anim.setAttribute('repeatCount', 'indefinite');
+    const animO = document.createElementNS('http://www.w3.org/2000/svg', 'animate');
+    animO.setAttribute('attributeName', 'opacity');
+    animO.setAttribute('from', '0.5');
+    animO.setAttribute('to', '0');
+    animO.setAttribute('dur', '2s');
+    animO.setAttribute('repeatCount', 'indefinite');
+    ring.appendChild(anim);
+    ring.appendChild(animO);
+    svg.appendChild(ring);
+})();
+
+// ========== TICKER TAPE ==========
+(function() {
+    const tickers = [
+        { sym: 'AAPL', price: '185.40', chg: '-14.2%', down: true },
+        { sym: 'NVDA', price: '724.50', chg: '-18.2%', down: true },
+        { sym: 'MSFT', price: '378.20', chg: '-16.8%', down: true },
+        { sym: 'GOOGL', price: '142.15', chg: '-13.1%', down: true },
+        { sym: 'META', price: '468.30', chg: '+2.4%', down: false },
+        { sym: 'AMZN', price: '172.80', chg: '-12.5%', down: true },
+        { sym: 'AVGO', price: '1,245.00', chg: '-15.3%', down: true },
+        { sym: 'CRM', price: '248.70', chg: '-19.1%', down: true },
+        { sym: 'AMD', price: '148.20', chg: '-22.4%', down: true },
+        { sym: 'NFLX', price: '612.00', chg: '+1.8%', down: false },
+    ];
+
+    const tape = document.getElementById('tickerTape');
+    const html = tickers.map(t =>
+        `<span class="inline-flex items-center gap-2 text-sm">
+            <span class="font-semibold text-white font-mono">${t.sym}</span>
+            <span class="text-slate-400 font-mono">$${t.price}</span>
+            <span class="${t.down ? 'text-red-400' : 'text-green-400'} font-mono text-xs">${t.chg}</span>
+        </span>`
+    ).join('');
+    tape.innerHTML = html + html; // duplicate for seamless loop
+})();
+
+// ========== SCROLL REVEAL ==========
+const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+        }
+    });
+}, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
+
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+// ========== COUNTER ANIMATION ==========
+const counterObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const el = entry.target;
+            const target = parseInt(el.dataset.target);
+            if (!target || el.dataset.done) return;
+            el.dataset.done = '1';
+
+            let current = 0;
+            const step = Math.max(1, Math.floor(target / 60));
+            const interval = setInterval(() => {
+                current += step;
+                if (current >= target) {
+                    current = target;
+                    clearInterval(interval);
+                }
+                el.textContent = current.toLocaleString();
+            }, 25);
+        }
+    });
+}, { threshold: 0.5 });
+
+document.querySelectorAll('.counter').forEach(el => counterObserver.observe(el));
+
+// ========== NAV SCROLL EFFECT ==========
+let lastScroll = 0;
+window.addEventListener('scroll', () => {
+    const nav = document.getElementById('nav');
+    const scroll = window.scrollY;
+    if (scroll > 100) {
+        nav.style.borderBottomColor = 'rgba(255,255,255,0.06)';
+    } else {
+        nav.style.borderBottomColor = 'rgba(255,255,255,0.04)';
+    }
+    lastScroll = scroll;
+});
+</script>
+
+</body>
+</html>
