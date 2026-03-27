@@ -807,18 +807,39 @@ with st.sidebar:
 
     st.divider()
     st.markdown('<div class="sidebar-section">Telegram Alerts</div>', unsafe_allow_html=True)
-    tg_enabled = st.toggle("Enable Telegram", value=False)
+    tg_enabled = st.toggle("Enable Telegram", value=True)
+
+    # Load saved credentials
+    _tg_creds_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache", "tg_creds.json")
+    _saved_tg = {}
+    try:
+        with open(_tg_creds_file) as _f:
+            _saved_tg = _json.load(_f)
+    except Exception:
+        pass
+
     tg_token = st.text_input(
         "Bot Token",
+        value=_saved_tg.get("token", ""),
         type="password",
         help="Get from @BotFather on Telegram",
     )
     tg_chat_id = st.text_input(
         "Chat ID",
+        value=_saved_tg.get("chat_id", ""),
         help="Your Telegram chat ID",
     )
+
+    # Auto-save credentials when changed
+    if tg_token and tg_chat_id:
+        _new_tg = {"token": tg_token, "chat_id": tg_chat_id}
+        if _new_tg != _saved_tg:
+            os.makedirs(os.path.dirname(_tg_creds_file), exist_ok=True)
+            with open(_tg_creds_file, "w") as _f:
+                _json.dump(_new_tg, _f)
+
     if tg_enabled and (not tg_token or not tg_chat_id):
-        st.caption("Set up: message @BotFather on Telegram → /newbot → get token. Then message your bot and visit api.telegram.org/bot<TOKEN>/getUpdates to find your chat\\_id")
+        st.caption("Set up: message @BotFather on Telegram, send /newbot, get token. Then message your bot and visit api.telegram.org/bot<TOKEN>/getUpdates for chat\\_id")
 
     tg_send_btn = st.button(
         "Send Results to Telegram",
@@ -1316,6 +1337,47 @@ if tg_send_btn and st.session_state.scan_results:
         else:
             st.error("Failed to send. Check your bot token and chat ID.")
 
+
+# ── GitHub Actions Status ──
+st.divider()
+with st.expander("GitHub Actions — Cloud Scans"):
+    try:
+        import requests as _req
+        _gh_api = "https://api.github.com/repos/idofin/Screener1/actions/runs?per_page=5"
+        _gh_resp = _req.get(_gh_api, timeout=5)
+        if _gh_resp.status_code == 200:
+            _runs = _gh_resp.json().get("workflow_runs", [])
+            if _runs:
+                for _run in _runs:
+                    _status_icon = {"completed": "circle-check", "in_progress": "clock", "queued": "clock"}.get(_run["status"], "circle")
+                    _conclusion = _run.get("conclusion", "running")
+                    if _conclusion == "success":
+                        _color = "green"
+                        _label = "Passed"
+                    elif _conclusion == "failure":
+                        _color = "red"
+                        _label = "Failed"
+                    elif _run["status"] == "in_progress":
+                        _color = "orange"
+                        _label = "Running..."
+                    else:
+                        _color = "gray"
+                        _label = _run["status"]
+
+                    _created = _run.get("created_at", "")[:16].replace("T", " ")
+                    _run_html = f'''<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+<span style="width:8px;height:8px;border-radius:50%;background:{_color};display:inline-block;"></span>
+<span style="color:#e2e8f0;font-size:13px;font-weight:600;">{_run["name"]}</span>
+<span style="color:#64748b;font-size:12px;margin-left:auto;">{_created}</span>
+<span style="color:{_color};font-size:12px;font-weight:500;">{_label}</span>
+</div>'''
+                    st.markdown(_run_html, unsafe_allow_html=True)
+            else:
+                st.caption("No runs yet. The daily scan runs Mon-Fri at 6:30 PM ET.")
+        else:
+            st.caption("Could not fetch GitHub Actions status")
+    except Exception:
+        st.caption("Could not connect to GitHub API")
 
 # ── Scan history ──
 st.divider()

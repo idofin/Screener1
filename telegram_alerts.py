@@ -60,13 +60,14 @@ def send_telegram_image(image_path: str, caption: str = "",
         print("Telegram credentials not set")
         return False
 
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    # Send as document to avoid Telegram's photo compression
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
     with open(image_path, "rb") as img:
         resp = requests.post(url, data={
             "chat_id": chat_id,
             "caption": caption,
             "parse_mode": "Markdown",
-        }, files={"photo": img}, timeout=30)
+        }, files={"document": (os.path.basename(image_path), img, "image/png")}, timeout=30)
 
     if resp.status_code == 200:
         return True
